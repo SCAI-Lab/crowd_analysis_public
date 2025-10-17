@@ -1,0 +1,74 @@
+dataloader:
+  batch_size: 32
+  num_workers: 4
+dataset:
+  additional_features:
+  - intensity
+  - time
+  augmentation: true
+  canonical: false
+  included_classes:
+  - pedestrian
+  name: JRDB
+  lidar_type: 3D
+  path: /home/jupyter-dominik/daav_data/JRDB
+  nsweeps: 10
+  num_points: 30000
+  voxel_size:
+  - 0.05
+  - 0.05
+  - 0.1
+  # 0 no correction, 1 remove false positives, 2 remove false negatives, 3 both.
+  pl_correction_level: 0  
+  cutout_kwargs:
+        fixed: True
+        centered: True
+        window_width: 1.0
+        window_depth: 0.5
+        num_cutout_pts: 56
+        padding_val: 29.99
+        area_mode: True
+model:
+  disentangled_loss: false
+  target_mode: 2
+  kwargs:
+    cr: 1.0
+    fpn: false
+    num_anchors: 1
+    num_ori_bins: 12
+    run_up: true
+  kwargs_2D:
+    dropout: 0.5
+    num_pts: 56
+    embedding_length: 128
+    alpha: 0.5
+    window_size: 7
+    panoramic_scan: True
+  cls_loss_2D:
+        type: 0  # 0 BCE, 1 SymmetricBCE, 2 PartiallyHuberisedBCE
+  mixup_alpha_2D: 0.0
+  mixup_w_2D: 0.0
+  self_paced_2D: False
+  type: MinkUNet
+pipeline:
+  Logger:
+    backup_list: []
+    log_dir: ./logs/
+    log_fname: log.txt
+    tag: unet_bl_voxel_jrdb_0.05_0.1
+    use_timestamp: true
+  Optim:
+    scheduler_kwargs:
+      epoch0: 15
+      epoch1: 40
+      lr0: 0.001
+      lr1: 1.0e-06
+  Trainer:
+    ckpt_interval: 8
+    epoch: 40
+    eval_interval: 100000.0
+    grad_norm_clip: -1.0
+    path_kitti_labels: "/home/jupyter-dominik/daav_data/JRDB/train_dataset/labels_kitti"
+  Evaluate:
+      plotting: true
+      visible_2D: true
