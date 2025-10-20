@@ -1,4 +1,4 @@
-# Crowd Analysis Setup
+# Overview of the Crowd Analysis Setup
 
 <p align="center">
   <!-- Placeholder: Overview GIF image -->
