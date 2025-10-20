@@ -52,5 +52,33 @@
     </div>
   </footer>
 
+  <!-- Mermaid renderer for README code blocks -->
+  <script src="https://cdn.jsdelivr.net/npm/mermaid@10/dist/mermaid.min.js"></script>
+  <script>
+    // Initialize Mermaid (you can change the theme if you like)
+    mermaid.initialize({ startOnLoad: false, theme: "default" });
+
+    // Convert ```mermaid fenced code blocks into <div class="mermaid">…</div>
+    document.addEventListener("DOMContentLoaded", () => {
+      // Look for both GitHub/Kramdown styles:
+      const candidates = document.querySelectorAll(
+        'code.language-mermaid, code.mermaid'
+      );
+
+      candidates.forEach((code) => {
+        const pre = code.closest('pre');
+        const container = document.createElement('div');
+        container.className = 'mermaid';
+        // Use the raw text content of the code block
+        container.textContent = code.textContent;
+        // Replace the entire <pre><code>…</code></pre> with the mermaid container
+        pre.replaceWith(container);
+      });
+
+      // Now ask Mermaid to render everything
+      mermaid.run();
+    });
+  </script>
+
 </body>
 </html>
