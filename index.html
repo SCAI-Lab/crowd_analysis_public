@@ -1,0 +1,56 @@
+---
+# Front matter forces Jekyll to process Liquid in this HTML file
+---
+
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+  <title>Crowd Analysis</title>
+  <link rel="stylesheet" href="style.css" />
+  <link rel="icon" href="favicon.ico" />
+</head>
+<body>
+
+  <!-- Header / Hero -->
+  <header>
+    <div class="header-lower">
+      <h1>
+        Assessing pedestrian responses to autonomous and<br/>
+        personal mobility robots in crowded public spaces
+      </h1>
+      <p>Comparison between Human-Human (HH) vs Human-Robot (HR) Interaction</p>
+    </div>
+
+    <!-- Simple nav (only Home active for now, others are placeholders you can add later) -->
+    <nav>
+      <a href="index.html" class="active">Home</a>
+      <a href="#" class="disabled" aria-disabled="true">About</a>
+      <a href="#" class="disabled" aria-disabled="true">Publications</a>
+    </nav>
+  </header>
+
+  <!-- Main content (README injected here) -->
+  <div class="content-container">
+    <main>
+      <article class="readme-wrapper">
+        {% capture readme %}{% include_relative README.md %}{% endcapture %}
+        {{ readme | markdownify }}
+      </article>
+    </main>
+  </div>
+
+  <!-- Footer with logos and contact line -->
+  <footer>
+    <div class="footer-container">
+      <div class="footer-logos">
+        <img src="webpage_assets/ethz_logo.png" alt="ETH Zurich Logo" />
+        <img src="webpage_assets/scai_lab_logo.png" alt="SCAI Lab Logo" />
+      </div>
+      <p>© 2025 ETH Zurich – Crowd Analysis Project | Contact: dominik.wojcikiewicz@hest.ethz.ch, diego.paez@scai.ethz.ch</p>
+    </div>
+  </footer>
+
+</body>
+</html>

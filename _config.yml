@@ -1,0 +1,13 @@
+title: Crowd Analysis
+description: Assessing pedestrian responses to autonomous and personal mobility robots in crowded public spaces
+theme: jekyll-theme-primer
+
+# Optional but recommended: skip heavy / data folders so Pages builds fast and doesn’t touch symlinks
+exclude:
+  - **/data/**
+  - **/datasets/**
+  - **/.devcontainer/**
+  - **/.github/**
+  - node_modules/**
+  - venv/**
+  - .venv/**

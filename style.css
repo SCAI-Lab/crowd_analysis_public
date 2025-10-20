@@ -1,0 +1,132 @@
+/* Base */
+* { box-sizing: border-box; }
+html, body { margin: 0; padding: 0; }
+body {
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+  line-height: 1.6;
+  color: #222;
+  background: #fff;
+}
+
+/* Header (hero) */
+header {
+  width: 100%;
+  background: #003366;         /* ETH-ish deep blue */
+  color: #f0f4f8;
+  box-shadow: 0 2px 4px rgba(0,0,0,.06);
+}
+
+.header-lower {
+  max-width: 980px;
+  margin: 0 auto;
+  padding: 28px 16px 20px;
+  text-align: center;
+}
+
+.header-lower h1 {
+  margin: 0;
+  font-size: clamp(1.8rem, 2.5vw + 1rem, 2.4rem);
+  line-height: 1.2;
+  font-weight: 700;
+}
+
+.header-lower p {
+  margin: 10px 0 0;
+  font-size: clamp(1rem, 1vw + .6rem, 1.25rem);
+  font-weight: 400;
+  opacity: 0.95;
+}
+
+/* Nav (tabs) */
+nav {
+  display: flex;
+  justify-content: center;
+  gap: 8px;
+  padding: 10px 8px 16px;
+  flex-wrap: wrap;
+}
+
+nav a {
+  text-decoration: none;
+  color: #f0f4f8;
+  padding: 6px 12px;
+  border-radius: 6px;
+  font-weight: 600;
+  transition: background .2s ease, color .2s ease;
+  border: 1px solid transparent;
+}
+
+nav a:hover { background: rgba(255,255,255,.15); }
+nav a.active {
+  background: #f0f4f8;
+  color: #003366;
+  border-color: #e6ecf2;
+}
+
+nav a.disabled {
+  opacity: 0.55;
+  cursor: not-allowed;
+}
+
+/* Main content */
+.content-container {
+  max-width: 980px;
+  margin: 28px auto 24px;
+  padding: 0 16px;
+}
+
+.readme-wrapper {
+  background: #fff;
+  border: 1px solid #eaecef;
+  border-radius: 12px;
+  padding: 24px;
+  box-shadow: 0 2px 6px rgba(0,0,0,.04);
+}
+
+/* Make README headings look nice under the hero */
+.readme-wrapper h1:first-child,
+.readme-wrapper h2:first-child {
+  margin-top: 0;
+}
+
+/* Footer */
+footer {
+  background: #f8f9fb;
+  margin-top: 40px;
+  border-top: 1px solid #eaecef;
+}
+
+.footer-container {
+  max-width: 980px;
+  margin: 0 auto;
+  padding: 22px 16px;
+}
+
+.footer-logos {
+  display: flex;
+  gap: 24px;
+  align-items: center;
+  justify-content: center;
+  flex-wrap: wrap;
+  margin-bottom: 12px;
+}
+
+.footer-logos img {
+  height: 42px;
+  width: auto;
+  display: block;
+}
+
+footer p {
+  margin: 0;
+  text-align: center;
+  color: #4b5563;
+  font-size: 0.95rem;
+}
+
+/* README content niceties */
+.readme-wrapper img { max-width: 100%; height: auto; }
+.readme-wrapper pre { overflow: auto; }
+.readme-wrapper code, .readme-wrapper pre code {
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, "Liberation Mono", monospace;
+}
