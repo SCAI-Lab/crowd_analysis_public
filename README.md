@@ -171,3 +171,5 @@ bash run_pipeline.sh
 ---
 
 ## Acknowledgment
+
+This research work was partially supported by the Innosuisse Project 103.421 IP-IC "Developing an AI-enabled Robotic Personal Vehicle for Reduced Mobility Population in Complex Environments" and the JST Moonshot R\&D [Grant Number JPMJMS2034-18].
