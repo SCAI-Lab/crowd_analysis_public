@@ -5,7 +5,7 @@
   <img src="images/intro_image_paper.png" alt="Overview of the crowd analysis pipeline (placeholder)" width="85%">
 </p>
 
-This repository accompanies an academic **publication**, an **updated, improved version of the Crowdbot dataset**, and a **dataset** collection. It provides a reproducible **analysis pipeline for pedestrian behavior in crowds**. By analyzing motion metrics and **proxemics**, we study differences between **human–human interactions (HHI)** and **human–robot interactions (HRI)** in crowded public spaces across the **Crowdbot**, **JRDB**, and **SiT** datasets.
+This repository accompanies an academic **publication**, and an **[updated, improved version of the Crowdbot dataset](https://zenodo.org/records/17694140)**. It provides a reproducible **analysis pipeline for pedestrian behavior in crowds**. By analyzing motion metrics and **proxemics**, we study differences between **human–human interactions (HHI)** and **human–robot interactions (HRI)** in crowded public spaces across the **Crowdbot**, **JRDB**, and **SiT** datasets.
 
 ---
 
@@ -166,7 +166,13 @@ bash run_pipeline.sh
 
 ## References:
 
-<!-- Place your references here -->
+Please cite both the dataset as well as the publication if you use our dataset/repository in your work.
+
+### Crowdbot_v2 dataset
+Wojcikiewicz, D., Billard, A., & Paez-Granados, D. (2025). CrowdBot_v2: Pedestrian–Robot crowd navigation dataset with pedestrian tracking (v2.0) [Data set]. Zenodo. https://doi.org/10.5281/zenodo.17694140
+
+### Academic Publication
+Coming soon...
 
 ---
 
