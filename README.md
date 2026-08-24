@@ -172,7 +172,7 @@ Please cite both the dataset as well as the publication if you use our dataset/r
 Wojcikiewicz, D., Billard, A., & Paez-Granados, D. (2025). CrowdBot_v2: Pedestrian–Robot crowd navigation dataset with pedestrian tracking (v2.0) [Data set]. Zenodo. https://doi.org/10.5281/zenodo.17694140
 
 ### Academic Publication
-Coming soon...
+Wojcikiewicz D., Billard A., Paez-Granados D. Assessing pedestrian responses to autonomous and personal mobility robots in crowded public spaces. Science Advances (2026). https://doi.org/10.1126/sciadv.aef2576
 
 ---
 
