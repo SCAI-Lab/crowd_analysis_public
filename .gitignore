@@ -108,3 +108,9 @@ venv.bak/
 results/
 deprecated/
 tmp/*
+
+*.zip
+*.mp4
+*.avi
+*.png
+*.jpg
