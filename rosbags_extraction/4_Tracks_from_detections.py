@@ -1,6 +1,8 @@
 #!/usr/bin/env python3
+# -*-coding:utf-8 -*-
+
 import os
-import sys
+import argparse
 import copy
 
 import numpy as np
@@ -131,13 +133,13 @@ class Settings:
     Settings class to store script parameters.
 
     Attributes:
-        dataset (str): Dataset that is being processed
-        folder (str): Different subfolder in rosbag/ dir
-        overwrite (bool): Whether to overwrite existing output
-        save_raw (bool): Whether to save raw data of detection results
-        min_conf (float): Minimum confidence threshold for 3D detections
-        track_2D (bool): Flag indicating whether to perform 2D tracking
-        min_conf_2D (float): Minimum confidence threshold for 2D detections
+        dataset (str): Dataset that is being processed (default: 'JRDB')
+        folder (str): Different subfolder in rosbag/ dir (default: '0424_mds_test').
+        overwrite (bool): Whether to overwrite existing output (default: True).
+        save_raw (bool): Whether to save raw data of detection results (default: False).
+        min_conf (float): Minimum confidence threshold for 3D detections (default: 0.5).
+        track_2D (bool): Flag indicating whether to perform 2D tracking (default: False).
+        min_conf_2D (float): Minimum confidence threshold for 2D detections (default: 0.5).
     """
 
     def __init__(self, dataset, config_path, folder, overwrite=False, save_raw=False, min_conf=0.5,
@@ -151,48 +153,46 @@ class Settings:
         self.track_2D = track_2D
         self.min_conf_2D = min_conf_2D
 
+def parse_args():
+    parser = argparse.ArgumentParser(description="Track lidar detections with AB3DMOT.")
+    parser.add_argument("--dataset", required=True, choices=["Crowdbot", "JRDB", "JRDB_TEST", "Daav", "SiT", "SCAND"])
+    parser.add_argument("--config", dest="config_path", required=True, help="Dataset path YAML.")
+    parser.add_argument("--folder", action="append", required=True, help="Logical dataset folder; repeat as needed.")
+    parser.add_argument("--track-2d", action="store_true")
+    parser.add_argument("--min-conf", type=float, default=0.5)
+    parser.add_argument("--min-conf-2d", type=float, default=0.5)
+    parser.add_argument("--distance-split", type=float, default=5.0)
+    parser.add_argument("--exchange-width", type=float, default=0.5)
+    parser.add_argument("--save-raw", action="store_true")
+    parser.add_argument("--overwrite", action="store_true")
+    args = parser.parse_args()
+    if args.dataset == "JRDB_TEST" and args.track_2d:
+        parser.error("JRDB_TEST has no 2D lidar/detections; omit --track-2d.")
+    return args
+
+
 if __name__ == '__main__':
-    tracking_distance_split = 5 # Split trackers circle less than 7m and rest more than 7m
-    tracking_info_exchange_width = 0.5 # Ring width for tracklets exchange between both trackers 
-    # folders = ['Cafeteria_1', 'Cafeteria_2', 'Cafeteria_3', 'Cafeteria_5', 'Cafeteria_6', 
-    #           'Cafe_street_1-002', 'Cafe_street_2-001', 
-    #           'Corridor_1', 'Corridor_10', 
-    #           'Hallway_1', 'Hallway_2', 'Hallway_3', 'Hallway_4', 'Hallway_6', 'Hallway_7', 'Hallway_8', 'Hallway_9', 'Hallway_10', 'Hallway_11', 
-    #           'Lobby_2', 'Lobby_3', 'Lobby_4', 'Lobby_5', 'Lobby_6', 'Lobby_7', 'Lobby_8', 
-    #           'Corridor_2', 'Corridor_3', 'Corridor_5', 'Corridor_7', 'Corridor_8', 'Corridor_9','Corridor_11',  
-    #           'Courtyard_1', 'Courtyard_2', 'Courtyard_4', 'Courtyard_5', 'Courtyard_6', 'Courtyard_8', 'Courtyard_9',
-    #           'Outdoor_Alley_2', 'Outdoor_Alley_3', 
-    #           'Subway_Entrance_2', 'Subway_Entrance_4', 
-    #           'Three_way_Intersection_3', 'Three_way_Intersection_4', 'Three_way_Intersection_5', 'Three_way_Intersection_8', 
-    #           'Crossroad_1-001',]
-    # folders = ['0325_rds_defaced', 
-    #           '0325_shared_control_defaced', 
-    #           '0327_shared_control_defaced', 
-    #           '0410_mds_defaced', 
-    #           '0410_rds_defaced', 
-    #           '0410_shared_control_defaced', 
-    #           '0424_mds_defaced', 
-    #           '0424_rds_defaced', 
-    #           '0424_shared_control_defaced', 
-    #           '1203_manual_defaced', 
-    #           '1203_shared_control_defaced']
-    folders = ['JRDB_whole',]
-    if len(sys.argv) > 1:
-        subdir_arg = sys.argv[1]  # Get the single argument
-        folders = [subdir_arg]
-        
-    for folder in folders:
-        # args = Settings(dataset='SiT', config_path='./datasets_configs/data_path_SiT.yaml',
-        #         folder=folder, overwrite=True, track_2D=True, min_conf=0.6, min_conf_2D=0.75)
-        # args = Settings(dataset='Crowdbot', config_path='./datasets_configs/data_path_Crowdbot.yaml',
-        #                 folder=folder, overwrite=False, track_2D=True, min_conf=0.5, min_conf_2D=0.75)
-        args = Settings(dataset='JRDB', config_path='./datasets_configs/data_path_JRDB.yaml',
-                folder=folder, overwrite=True, track_2D=True, min_conf=0.5, min_conf_2D=0.7)
+    cli_args = parse_args()
+    tracking_distance_split = cli_args.distance_split
+    tracking_info_exchange_width = cli_args.exchange_width
 
-        assert args.dataset in ['JRDB', 'Crowdbot', 'SiT']
+    for folder in cli_args.folder:
+        args = Settings(
+            dataset=cli_args.dataset,
+            config_path=cli_args.config_path,
+            folder=folder,
+            track_2D=cli_args.track_2d,
+            min_conf=cli_args.min_conf,
+            min_conf_2D=cli_args.min_conf_2d,
+            save_raw=cli_args.save_raw,
+            overwrite=cli_args.overwrite,
+        )
 
-        #Qolo pose
-        if args.dataset == 'JRDB':
+        if args.dataset == 'JRDB_TEST' and args.track_2D:
+            raise ValueError("JRDB_TEST has no 2D lidar/detections. Use track_2D=False.")
+
+        # Pose source
+        if args.dataset in ['JRDB', 'JRDB_TEST']:
             pose_folder = 'tf_JRDB'
             pose_suffix = "_tfJRDB_sampled.npy"
         elif args.dataset == 'Crowdbot':
@@ -201,9 +201,12 @@ if __name__ == '__main__':
         elif args.dataset == 'SiT':
             pose_folder = 'tf_SiT'
             pose_suffix = "_tf_SiT_sampled.npy"
+        elif args.dataset == 'SCAND':
+            pose_folder = 'tf_SCAND'
+            pose_suffix = "_tfSCAND_sampled.npy"
         else:
-            raise RuntimeError
-
+            pose_folder = 'tf_daav'
+            pose_suffix = "_tfdaav_sampled.npy"
 
         fake_2D_z = 0.9
         fake_2D_height = 1.8
@@ -250,24 +253,16 @@ if __name__ == '__main__':
                     tracker_merged_close = AB3DMOT(max_age=max_age, min_hits=min_hits, thres=[thresh_2D_IoU, thresh_2D_dist], metric=['iou_2d', 'dist_2d'], log=log, ID_init=ID_init_close,)
                     tracker_merged_far = AB3DMOT(max_age=max_age, min_hits=min_hits, thres=[thresh_3D_IoU, thresh_3D_dist], metric=['iou_3d', 'dist_3d'], log=log, ID_init=ID_init_far)
 
+                tf_dir = os.path.join(cb_data.source_data_dir, pose_folder)
+                pose_stampe_path = os.path.join(tf_dir, seq + pose_suffix)
+                lidar_pose_stamped = np.load(pose_stampe_path, allow_pickle=True).item()
                 pbar = tqdm(total=cb_data.nr_frames(seq_idx))
                 for fr_idx in range(cb_data.nr_frames(seq_idx)):
                     # if fr_idx < 3510:
                     #     continue
                     _, _, _, dets_gt, _, dets, dets_conf, _, dets_2D, dets_2D_conf, _, dets_far, dets_far_conf, dets_2D_close, dets_2D_conf_close, _ = cb_data[seq_idx, fr_idx]
                     dets = dets[dets_conf > args.min_conf]
-
-                    tf_dir = os.path.join(cb_data.source_data_dir, pose_folder)
-                    pose_stampe_path = os.path.join(
-                        tf_dir, seq + pose_suffix
-                    )
-                    lidar_pose_stamped = np.load(
-                        pose_stampe_path, allow_pickle=True
-                    ).item()
                     pos = lidar_pose_stamped["position"][fr_idx, :]
-                    # orient = pose_stamped["orientation"][fr_idx, :]
-                    # dets[:,:3] = get_pc_tranform(pc=dets[:,:3], pos=pos, quat=orient) 
-                    # dets[:,6] += R.from_quat(orient).as_euler('xyz')[2]
                     if dets.size != 0:
                         dets = reorder(dets)
                     

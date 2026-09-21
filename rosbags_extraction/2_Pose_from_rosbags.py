@@ -1,13 +1,12 @@
 #!/usr/bin/env python3
 from __future__ import division
+import argparse
 import os
-import sys
 import numpy as np
 from scipy.spatial.transform import Rotation as R
 import scipy.signal as signal
 from scipy import interpolate
 from scipy.spatial.transform import Slerp
-from scipy.spatial.transform import Rotation as R
 import quaternion as Q
 import quaternion.quaternion_time_series as qseries
 
@@ -684,6 +683,51 @@ def smooth(
         )
     return nd_data_smoothed
 
+def extract_pose_from_jrdb_test_odom_csv(csv_path):
+    """
+    Read JRDB test odometry CSV:
+      timestamp_ns,x,y,z,qx,qy,qz,qw
+
+    Returns the same pose dict structure used elsewhere:
+      {
+        "timestamp": seconds,
+        "position": (N,3),
+        "orientation": (N,4),
+        "frame_id": "odom",
+        "child_frame_id": "base_chassis_link",
+      }
+    """
+    if not os.path.isfile(csv_path):
+        raise FileNotFoundError(f"JRDB test odometry CSV not found: {csv_path}")
+
+    arr = np.loadtxt(csv_path, delimiter=",", skiprows=1)
+    if arr.ndim == 1:
+        arr = arr[None, :]
+
+    timestamps = arr[:, 0].astype(np.float64) * 1e-9   # ns -> s
+    positions = arr[:, 1:4].astype(np.float64)
+    orientations = arr[:, 4:8].astype(np.float64)
+
+    pose_stamped_dict = {
+        "timestamp": timestamps,
+        "position": positions,
+        "orientation": orientations,
+        "frame_id": "odom",
+        "child_frame_id": "base_chassis_link",
+    }
+
+    pose_stamped_dict = deduplicate_pose_stamped_by_timestamp(pose_stamped_dict)
+
+    print(
+        "Raw input {} frames, about {:.1f} Hz".format(
+            len(pose_stamped_dict["timestamp"]),
+            len(pose_stamped_dict["timestamp"]) /
+            (max(pose_stamped_dict["timestamp"]) - min(pose_stamped_dict["timestamp"]))
+        )
+    )
+
+    return pose_stamped_dict
+
 def extract_and_combine_transforms(bag_path, frames, dynamic_index):
     """
     Extracts and combines transforms from a ROS bag file to form a single 
@@ -795,44 +839,147 @@ def extract_and_combine_transforms(bag_path, frames, dynamic_index):
 
     return result
 
-#%% Utility function for extraction tf from rosbag and apply interpolation
-def extract_pose_from_rosbag(bag_file_path, dataset='JRDB'):
-    """Esxtract pose_stamped from rosbag without rosbag play"""
+SCAND_ROBOT_CONFIG = {
+    "Jackal": {
+        "odom_topic": "/jackal_velocity_controller/odom",
+        # Must match Script 1
+        "body_to_lidar_translation": np.array([0.0, 0.0, 0.40], dtype=np.float64),
+        "body_to_lidar_quaternion": np.array([0.0, 0.0, 0.0, 1.0], dtype=np.float64),
+    },
+    "Spot": {
+        "odom_topic": "/odom",
+        # Must match Script 1
+        "body_to_lidar_translation": np.array([0.0, 0.0, 0.86], dtype=np.float64),
+        "body_to_lidar_quaternion": np.array([0.0, 0.0, 0.0, 1.0], dtype=np.float64),
+    },
+}
 
-    # load rosbag and BagTfTransformer
-    bag = rosbag.Bag(bag_file_path)
-    bag_transformer = BagTfTransformer(bag)
 
-    if dataset == 'JRDB':
-        trans_iter = bag_transformer.lookupTransformWhenTransformUpdates(
-            "odom",
-            "base_chassis_link",
-            trigger_orig_frame="odom",
-            trigger_dest_frame="base_link",)
-    elif dataset == 'Crowdbot':
-        trans_iter = bag_transformer.lookupTransformWhenTransformUpdates(
-        "odom",
-        "tf_qolo",)
-    else:
-        trans_iter = bag_transformer.lookupTransformWhenTransformUpdates(
-        "camera_init",
-        "body",)
-    
-    t_list, p_list, o_list = [], [], []
-    for timestamp, transformation in trans_iter:
-        (position, orientation) = transformation
-        # timestamp in genpy.Time type
-        t_list.append(timestamp.to_sec())
-        p_list.append(position)
-        o_list.append(orientation)
+def infer_scand_robot_type_from_bag_path(bag_path):
+    bag_name = os.path.basename(bag_path)
+    stem = os.path.splitext(bag_name)[0]   # remove .bag
+    parts = stem.split("_")
 
-    t_np = np.asarray(t_list, dtype=np.float64)
-    p_np = np.asarray(p_list, dtype=np.float64)
-    o_np = np.asarray(o_list, dtype=np.float64)
+    # Expected examples:
+    # A_Jackal_...
+    # B_Spot_...
+    # Z_Jackal_...
+    if len(parts) < 2:
+        raise ValueError(f"Could not infer SCAND robot type from bag name: {bag_name}")
 
-    pose_stamped_dict = {"timestamp": t_np, "position": p_np, "orientation": o_np}
+    robot_token = parts[1]
+
+    if robot_token == "Jackal":
+        return "Jackal"
+    if robot_token == "Spot":
+        return "Spot"
+
+    raise ValueError(f"Could not infer SCAND robot type from bag name: {bag_name}")
+
+
+def deduplicate_pose_stamped_by_timestamp(pose_stamped_dict):
+    ts = pose_stamped_dict["timestamp"]
+    _, unique_idx = np.unique(ts, return_index=True)
+    unique_idx = np.sort(unique_idx)
+
+    out = {
+        "timestamp": pose_stamped_dict["timestamp"][unique_idx],
+        "position": pose_stamped_dict["position"][unique_idx],
+        "orientation": pose_stamped_dict["orientation"][unique_idx],
+    }
+
+    # Preserve optional fields if present
+    for key in ["body_position", "body_orientation", "robot_type", "frame_id", "child_frame_id"]:
+        if key in pose_stamped_dict:
+            val = pose_stamped_dict[key]
+            if isinstance(val, np.ndarray) and len(val) == len(ts):
+                out[key] = val[unique_idx]
+            else:
+                out[key] = val
+
+    return out
+
+
+def extract_pose_from_scand_odom(bag_file_path):
+    """
+    Extract SCAND pose directly from odom topic and compose:
+        odom -> body   from Odometry
+        body -> lidar  from our static guess
+    Returns odom -> velodyne pose, to stay consistent with Script 1.
+    """
+    robot_type = infer_scand_robot_type_from_bag_path(bag_file_path)
+    cfg = SCAND_ROBOT_CONFIG[robot_type]
+    odom_topic = cfg["odom_topic"]
+
+    ts_list = []
+    body_pos_list = []
+    body_ori_list = []
+
+    with rosbag.Bag(bag_file_path) as bag:
+        topic_info = bag.get_type_and_topic_info()[1]
+        if odom_topic not in topic_info:
+            raise RuntimeError(
+                f"SCAND {robot_type}: required odom topic {odom_topic} not found in {bag_file_path}"
+            )
+
+        frame_id = None
+        child_frame_id = None
+
+        for _, msg, _ in bag.read_messages(topics=[odom_topic]):
+            frame_id = msg.header.frame_id
+            child_frame_id = msg.child_frame_id
+
+            ts_list.append(msg.header.stamp.to_sec())
+            body_pos_list.append([
+                msg.pose.pose.position.x,
+                msg.pose.pose.position.y,
+                msg.pose.pose.position.z,
+            ])
+            body_ori_list.append([
+                msg.pose.pose.orientation.x,
+                msg.pose.pose.orientation.y,
+                msg.pose.pose.orientation.z,
+                msg.pose.pose.orientation.w,
+            ])
+
+    if len(ts_list) == 0:
+        raise RuntimeError(f"No odometry messages found on {odom_topic} in {bag_file_path}")
+
+    ts_np = np.asarray(ts_list, dtype=np.float64)
+    body_pos_np = np.asarray(body_pos_list, dtype=np.float64)
+    body_ori_np = np.asarray(body_ori_list, dtype=np.float64)
+
+    body_rot = R.from_quat(body_ori_np)
+    body_to_lidar_rot = R.from_quat(cfg["body_to_lidar_quaternion"])
+    body_to_lidar_t = cfg["body_to_lidar_translation"]
+
+    # Compose odom -> lidar
+    lidar_pos_np = body_pos_np + body_rot.apply(body_to_lidar_t)
+    lidar_ori_np = (body_rot * body_to_lidar_rot).as_quat()
+
+    pose_stamped_dict = {
+        "timestamp": ts_np,
+        "position": lidar_pos_np,
+        "orientation": lidar_ori_np,
+        # keep body pose too in case you want it later
+        "body_position": body_pos_np,
+        "body_orientation": body_ori_np,
+        "robot_type": robot_type,
+        "frame_id": frame_id,
+        "child_frame_id": child_frame_id,
+    }
+
+    pose_stamped_dict = deduplicate_pose_stamped_by_timestamp(pose_stamped_dict)
+
+    print(
+        "Raw input {} frames, about {:.1f} Hz".format(
+            len(pose_stamped_dict["timestamp"]),
+            len(pose_stamped_dict["timestamp"]) /
+            (max(pose_stamped_dict["timestamp"]) - min(pose_stamped_dict["timestamp"]))
+        )
+    )
+
     return pose_stamped_dict
-
 
 # deduplicate tf 
 def deduplicate_tf(dataset_tf):
@@ -874,31 +1021,15 @@ def deduplicate_tf(dataset_tf):
 
 
 def interp_pose(source_dict, interp_ts):
-    """Calculate interpolations for all states with scipy"""
     source_ts = source_dict.get("timestamp")
     source_pos = source_dict.get("position")
     source_ori = source_dict.get("orientation")
 
+    interp_ts = np.asarray(interp_ts, dtype=np.float64).copy()
+    interp_ts = np.clip(interp_ts, np.min(source_ts), np.max(source_ts))
+
     interp_dict = {}
     interp_dict["timestamp"] = deepcopy(interp_ts)
-
-    # method1: saturate the timestamp outside the range
-    if np.min(interp_ts) < np.min(source_ts):
-        interp_ts[interp_ts < min(source_ts)] = min(source_ts)
-    if np.max(interp_ts) > np.max(source_ts):
-        interp_ts[interp_ts > max(source_ts)] = max(source_ts)
-
-    # method2: discard timestamps smaller or bigger than source
-    # start_idx, end_idx = 0, -1
-    # if min(interp_ts) < min(source_ts):
-    #     start_idx = np.argmax(interp_ts[interp_ts - source_ts.min() < 0]) + 1
-    # if max(interp_ts) > max(source_ts):
-    #     end_idx = np.argmax(interp_ts[interp_ts - source_ts.max() <= 0]) + 1
-    # interp_ts = interp_ts[start_idx:end_idx]
-
-    # print(interp_ts.min(), interp_ts.max(), source_ts.min(), source_ts.max())
-
-    # Slerp -> interp_rotation -> ValueError: Times must be in strictly increasing order.
     interp_dict["orientation"] = interp_rotation(source_ts, interp_ts, source_ori)
     interp_dict["position"] = interp_translation(source_ts, interp_ts, source_pos)
     return interp_dict, interp_ts
@@ -942,110 +1073,121 @@ def qv_mult(quat_, vec_):
     return res_vec[:3]
 
 class Settings:
-    """
-    Settings class to store script parameters.
-
-    Attributes:
-        dataset (str): Dataset that is being processed
-        config_path (str): Path to the configuration file
-        folder (str): Different subfolder in rosbag/ dir
-        hz (float): Desired interpolated high frequency
-        smooth (bool): Filter datapoints with Savitzky-Golay or moving-average filter
-        overwrite (bool): Overwrite existing rosbags
-    """
-
-    def __init__(self, dataset, config_path, 
-                 folder, hz=200.0, smooth=True, overwrite=False):
+    def __init__(
+        self,
+        dataset,
+        config_path,
+        folder,
+        hz=200.0,
+        smooth=True,
+        overwrite=False,
+        jrdb_test_odom_root=None,
+    ):
         self.dataset = dataset
         self.config_path = config_path
         self.folder = folder
         self.hz = hz
         self.smooth = smooth
         self.overwrite = overwrite
+        self.jrdb_test_odom_root = jrdb_test_odom_root
+
+def parse_args():
+    parser = argparse.ArgumentParser(
+        description="Extract, interpolate, and save robot poses aligned to lidar frames."
+    )
+    parser.add_argument("--dataset", required=True, choices=["Crowdbot", "JRDB", "JRDB_TEST", "Daav", "SCAND"])
+    parser.add_argument("--config", dest="config_path", required=True, help="Dataset path YAML.")
+    parser.add_argument("--folder", action="append", required=True, help="Logical dataset folder; repeat as needed.")
+    parser.add_argument("--jrdb-test-odom-root", help="Directory containing SteamLO <sequence>.csv files.")
+    parser.add_argument("--hz", type=float, default=200.0)
+    parser.add_argument("--no-smooth", action="store_true", help="Disable Savitzky-Golay smoothing of saved robot state.")
+    parser.add_argument("--overwrite", action="store_true")
+    args = parser.parse_args()
+    if args.dataset == "JRDB_TEST" and not args.jrdb_test_odom_root:
+        parser.error("JRDB_TEST requires --jrdb-test-odom-root.")
+    return args
+
 
 if __name__ == '__main__':
-    # Instantiate the Settings object with custom or default values
-    # folders = ['Cafeteria_1', 'Cafeteria_2', 'Cafeteria_3', 'Cafeteria_5', 'Cafeteria_6', 
-    #           'Cafe_street_1-002', 'Cafe_street_2-001', 
-    #           'Corridor_1', 'Corridor_10', 
-    #           'Hallway_1', 'Hallway_2', 'Hallway_3', 'Hallway_4', 'Hallway_6', 'Hallway_7', 'Hallway_8', 'Hallway_9', 'Hallway_10', 'Hallway_11', 
-    #           'Lobby_2', 'Lobby_3', 'Lobby_4', 'Lobby_5', 'Lobby_6', 'Lobby_7', 'Lobby_8', 
-    #           'Corridor_2', 'Corridor_3', 'Corridor_5', 'Corridor_7', 'Corridor_8', 'Corridor_9','Corridor_11',  
-    #           'Courtyard_1', 'Courtyard_2', 'Courtyard_4', 'Courtyard_5', 'Courtyard_6', 'Courtyard_8', 'Courtyard_9',
-    #           'Outdoor_Alley_2', 'Outdoor_Alley_3', 
-    #           'Subway_Entrance_2', 'Subway_Entrance_4', 
-    #           'Three_way_Intersection_3', 'Three_way_Intersection_4', 'Three_way_Intersection_5', 'Three_way_Intersection_8', 
-    #           'Crossroad_1-001',]
-    # folders = ['0325_rds_defaced', 
-    #           '0325_shared_control_defaced', 
-    #           '0327_shared_control_defaced', 
-    #           '0410_mds_defaced', 
-    #           '0410_rds_defaced', 
-    #           '0410_shared_control_defaced', 
-    #           '0424_mds_defaced', 
-    #           '0424_rds_defaced', 
-    #           '0424_shared_control_defaced', 
-    #           '1203_manual_defaced', 
-    #           '1203_shared_control_defaced']
-    folders = ['JRDB_whole',]
-    if len(sys.argv) > 1:
-        subdir_arg = sys.argv[1]  # Get the single argument
-        folders = [subdir_arg]
-        
-    for folder in folders:
-        # args = Settings(dataset='Crowdbot', folder=folder, overwrite=False,
-        #                 config_path='./datasets_configs/data_path_Crowdbot.yaml')
-        args = Settings(dataset='JRDB', folder=folder, overwrite=True,
-                        config_path='./datasets_configs/data_path_JRDB.yaml')
-
-        assert args.dataset in ['JRDB', 'Crowdbot']
+    cli_args = parse_args()
+    for folder in cli_args.folder:
+        args = Settings(
+            dataset=cli_args.dataset,
+            config_path=cli_args.config_path,
+            folder=folder,
+            hz=cli_args.hz,
+            smooth=not cli_args.no_smooth,
+            overwrite=cli_args.overwrite,
+            jrdb_test_odom_root=cli_args.jrdb_test_odom_root,
+        )
 
 
         cb_data = CrowdBotDatabase(args.folder, args.config_path)
 
-        rosbag_dir = os.path.join(cb_data.bagbase_dir, args.folder)
-        if args.dataset == 'Crowdbot':
-            bag_files = list(filter(processed_Crowdbot_bag_file_filter, os.listdir(rosbag_dir)))
-        elif args.dataset == 'JRDB':
-            bag_files = list(filter(bag_file_filter, os.listdir(rosbag_dir)))
+        if args.dataset == 'JRDB_TEST':
+            seq_items = cb_data.seqs
+            print(
+                "Starting extracting pose_stamped files from {} JRDB test sequences!".format(len(seq_items))
+            )
         else:
-            bag_files = list(filter(bag_file_filter, os.listdir(rosbag_dir)))
+            rosbag_dir = os.path.join(cb_data.bagbase_dir, args.folder)
+            if args.dataset == 'Crowdbot':
+                seq_items = list(filter(processed_Crowdbot_bag_file_filter, os.listdir(rosbag_dir)))
+            elif args.dataset == 'JRDB':
+                seq_items = list(filter(bag_file_filter, os.listdir(rosbag_dir)))
+            else:
+                seq_items = list(filter(bag_file_filter, os.listdir(rosbag_dir)))
+
+                print(
+                    "Starting extracting pose_stamped files from {} rosbags!".format(len(seq_items))
+                )
 
         # destination: pose data in data/xxxx_processed/source_data/tf_JRDB
-        if args.dataset == 'JRDB':
+        if args.dataset in ['JRDB', 'JRDB_TEST']:
             tf_suffix = 'tf_JRDB'
         elif args.dataset == 'Crowdbot':
             tf_suffix = 'tf_qolo'
+        elif args.dataset == 'SCAND':
+            tf_suffix = 'tf_SCAND'
         else:
-            raise RuntimeError
+            tf_suffix = 'tf_daav'
 
         tf_dataset_dir = os.path.join(cb_data.source_data_dir, tf_suffix)
         if not os.path.exists(tf_dataset_dir):
             os.makedirs(tf_dataset_dir)
 
-        print(
-            "Starting extracting pose_stamped files from {} rosbags!".format(len(bag_files))
-        )
-
         counter = 0
-        for bf in bag_files:
-            bag_path = os.path.join(rosbag_dir, bf)
-            seq = bf.split(".")[0]
-            counter += 1
-            print("({}/{}): {}".format(counter, len(bag_files), bag_path))
+        for item in seq_items:
+            if args.dataset == 'JRDB_TEST':
+                seq = item
+                bag_path = None
+                odom_csv_path = os.path.join(args.jrdb_test_odom_root, seq + ".csv")
+                counter += 1
+                print("({}/{}): {}".format(counter, len(seq_items), odom_csv_path))
+            else:
+                bf = item
+                bag_path = os.path.join(rosbag_dir, bf)
+                seq = bf.split(".")[0]
+                odom_csv_path = None
+                counter += 1
+                print("({}/{}): {}".format(counter, len(seq_items), bag_path))
 
-            if args.dataset == 'JRDB':
-                # sample with lidar frame
+            if args.dataset in ['JRDB', 'JRDB_TEST']:
                 all_stamped_filepath = os.path.join(tf_dataset_dir, seq + "_tfJRDB_raw.npy")
                 lidar_stamped_filepath = os.path.join(tf_dataset_dir, seq + "_tfJRDB_sampled.npy")
-                # sample at high frequency (200Hz)
                 state_filepath = os.path.join(tf_dataset_dir, seq + "_JRDB_state.npy")
             elif args.dataset == 'Crowdbot':
                 all_stamped_filepath = os.path.join(tf_dataset_dir, seq + "_tfqolo_raw.npy")
                 lidar_stamped_filepath = os.path.join(tf_dataset_dir, seq + "_tfqolo_sampled.npy")
                 state_filepath = os.path.join(tf_dataset_dir, seq + "_qolo_state.npy")
+            elif args.dataset == 'SCAND':
+                all_stamped_filepath = os.path.join(tf_dataset_dir, seq + "_tfSCAND_raw.npy")
+                lidar_stamped_filepath = os.path.join(tf_dataset_dir, seq + "_tfSCAND_sampled.npy")
+                state_filepath = os.path.join(tf_dataset_dir, seq + "_SCAND_state.npy")
             else:
-                raise RuntimeError
+                all_stamped_filepath = os.path.join(tf_dataset_dir, seq + "_tfdaav_raw.npy")
+                lidar_stamped_filepath = os.path.join(tf_dataset_dir, seq + "_tfdaav_sampled.npy")
+                state_filepath = os.path.join(tf_dataset_dir, seq + "_daav_state.npy")
 
 
             if (
@@ -1064,29 +1206,49 @@ if __name__ == '__main__':
                         allow_pickle=True,
                     ).item()
 
-                    # pose_stamped_dict = extract_pose_from_rosbag(bag_path, dataset=args.dataset)
-                    if args.dataset == 'JRDB':
-                        frames = ['odom', 'base_link', 'base_chassis_link']
-                    elif args.dataset == 'Crowdbot':
-                        frames = ['odom', 'tf_qolo']
-                    else:
-                        frames = ['camera_init', 'body']
-                    pose_stamped_dict = extract_and_combine_transforms(bag_path, frames, dynamic_index=0)
-                    _, ts_unique = np.unique(pose_stamped_dict.get("timestamp"), return_index=True)
-                    ts, pos, orient = pose_stamped_dict.get("timestamp")[ts_unique], pose_stamped_dict.get("position")[ts_unique], pose_stamped_dict.get("orientation")[ts_unique],
-                    pose_stamped_dict_ = {
-                        "timestamp": ts,
-                        "position": pos,
-                        "orientation": orient,
-                    }
+                    if args.dataset == 'SCAND':
+                        pose_stamped_dict_ = extract_pose_from_scand_odom(bag_path)
 
-                    if args.dataset == 'JRDB':
+                    elif args.dataset == 'JRDB_TEST':
+                        pose_stamped_dict_ = extract_pose_from_jrdb_test_odom_csv(odom_csv_path)
+
+                    else:
+                        if args.dataset == 'JRDB':
+                            frames = ['odom', 'base_link', 'base_chassis_link']
+                        elif args.dataset == 'Crowdbot':
+                            frames = ['odom', 'tf_qolo']
+                        else:
+                            frames = ['camera_init', 'body']
+
+                        pose_stamped_dict = extract_and_combine_transforms(
+                            bag_path, frames, dynamic_index=0
+                        )
+                        pose_stamped_dict_ = deduplicate_pose_stamped_by_timestamp(
+                            pose_stamped_dict
+                        )
+
+                    if args.dataset in ['JRDB', 'JRDB_TEST']:
                         lidar_ts_offset = lidar_stamped.get("timestamp")[0]
                         timestamps = pose_stamped_dict_['timestamp']
                         differences = np.abs(timestamps - lidar_ts_offset)
                         closest_index = np.argmin(differences)
                         pos_offset = pose_stamped_dict_['position'][closest_index]
+
                         pose_stamped_dict_['position'] = pose_stamped_dict_['position'] - pos_offset
+
+                    elif args.dataset == 'SCAND':
+                        lidar_ts_offset = lidar_stamped.get("timestamp")[0]
+                        timestamps = pose_stamped_dict_['timestamp']
+                        differences = np.abs(timestamps - lidar_ts_offset)
+                        closest_index = np.argmin(differences)
+
+                        if 'body_position' not in pose_stamped_dict_:
+                            raise RuntimeError("SCAND pose dictionary is missing 'body_position'")
+
+                        body_pos_offset = pose_stamped_dict_['body_position'][closest_index].copy()
+
+                        pose_stamped_dict_['position'] = pose_stamped_dict_['position'] - body_pos_offset
+                        pose_stamped_dict_['body_position'] = pose_stamped_dict_['body_position'] - body_pos_offset
 
                     # pose_stamped_dict_ = deduplicate_tf(pose_stamped_dict) # Deleted for JRDB
                     print("Raw input {} frames, about {:.1f} Hz".format(len(pose_stamped_dict_["timestamp"]), len(pose_stamped_dict_["timestamp"]) / (max(pose_stamped_dict_["timestamp"]) - min(pose_stamped_dict_["timestamp"]))))
@@ -1102,15 +1264,26 @@ if __name__ == '__main__':
                         all_stamped_filepath, allow_pickle=True
                     ).item()
 
-                # _JRDB_state.npy
-                init_ts = pose_stamped_dict_.get("timestamp")
-                start_ts, end_ts = init_ts.min(), init_ts.max()
-                interp_dt = 1 / args.hz
-                high_interp_ts = np.arange(
-                    start=start_ts, step=interp_dt, stop=end_ts, dtype=np.float64
-                )
-                # position & orientation
-                state_dict, high_interp_ts = interp_pose(pose_stamped_dict_, high_interp_ts)
+                init_ts_abs = pose_stamped_dict_.get("timestamp").astype(np.float64)
+                t0 = init_ts_abs[0]
+                init_ts = init_ts_abs - t0
+
+                pose_stamped_rel = {
+                    "timestamp": init_ts,
+                    "position": pose_stamped_dict_["position"],
+                    "orientation": pose_stamped_dict_["orientation"],
+                }
+
+                interp_dt = 1.0 / args.hz
+                duration = init_ts[-1]
+                num_steps = int(np.floor(duration / interp_dt)) + 1
+                high_interp_ts = np.arange(num_steps, dtype=np.float64) * interp_dt
+
+                state_dict, high_interp_ts = interp_pose(pose_stamped_rel, high_interp_ts)
+
+                # convert back to absolute time and keep using absolute timestamps from here on
+                high_interp_ts = high_interp_ts + t0
+                state_dict["timestamp"] = high_interp_ts
                 print(
                     "Interpolated output {} frames, about {:.1f} Hz".format(
                         len(high_interp_ts),
@@ -1281,8 +1454,8 @@ if __name__ == '__main__':
                     state_dict.update({"x_acc": smoothed_x_acc})
                     state_dict.update({"zrot_acc": smoothed_zrot_acc})
                 else:
-                    state_dict.update({"x_acc": smoothed_x_acc})
-                    state_dict.update({"zrot_acc": smoothed_zrot_acc})
+                    state_dict.update({"x_acc": state_acc["x"]})
+                    state_dict.update({"zrot_acc": state_acc["zrot"]})
 
                 # jerk
                 print("Computing jerk!")

@@ -15,6 +15,15 @@ def read_yaml(yaml_file):
     return data
 
 
+def resolve_config_path(path_value, config_file):
+    """Expand variables and resolve relative dataset paths beside the YAML file."""
+    expanded = os.path.expandvars(os.path.expanduser(str(path_value)))
+    if os.path.isabs(expanded):
+        return os.path.normpath(expanded)
+    config_dir = os.path.dirname(os.path.abspath(config_file))
+    return os.path.normpath(os.path.join(config_dir, expanded))
+
+
 class CrowdbotExpParam:
     """Class for extracting experiment parameter according to date and type"""
 
@@ -34,8 +43,8 @@ class CrowdBotData(object):
     def __init__(self, config=DEFAULT_CONFIG_PATH):
         self.config = config
         data_config = read_yaml(self.config)
-        self.bagbase_dir = data_config['bagbase_dir']
-        self.outbase_dir = data_config['outbase_dir']
+        self.bagbase_dir = resolve_config_path(data_config['bagbase_dir'], self.config)
+        self.outbase_dir = resolve_config_path(data_config['outbase_dir'], self.config)
 
     def write_yaml(self, data):
         """
@@ -55,8 +64,8 @@ class CrowdBotDatabase(CrowdBotData):
             super(CrowdBotDatabase, self).__init__(config)
         
         data_config = read_yaml(self.config)
-        self.bagbase_dir = data_config['bagbase_dir']
-        self.outbase_dir = data_config['outbase_dir']
+        self.bagbase_dir = resolve_config_path(data_config['bagbase_dir'], self.config)
+        self.outbase_dir = resolve_config_path(data_config['outbase_dir'], self.config)
 
         # Store the classdir list or convert it to a list if it's a single item
         self.classdirs = classdir if isinstance(classdir, list) else [classdir]

@@ -1,2 +1,2 @@
-bagbase_dir: /scai_data/data01/daav/SiT
+bagbase_dir: /scai_data/data01/daav/SiT # Not used for SiT but required in class construction
 outbase_dir: /scai_data/data01/daav/SiT

@@ -1,6 +1,9 @@
 #!/usr/bin/env python3
+"""Run 3D and optional 2D pedestrian detection on extracted lidar frames."""
+
+import argparse
 import os
-import sys
+
 from lidar_det.DR_SPAAM_detector import DR_SPAAM_detector
 import numpy as np
 from tqdm import tqdm
@@ -9,25 +12,7 @@ from lidar_det.PersonMinkUnet_detector import DetectorWithClock
 from scipy.spatial.transform import Rotation as R
 from lidar_det.utils.utils_box3d import nms_3d_dist_gpu
 
-from scipy.spatial.transform import Rotation as R
 import open3d as o3d
-
-import torch
-
-print("Testing cuda installation...\n")
-
-print(" -> Cuda available:         {}".format(torch.cuda.is_available()))
-print(" -> Num. of cuda devices:   {}".format(torch.cuda.device_count()))
-                                          
-cuda_device_id = torch.cuda.current_device()
-print(" -> Current cuda device:    {}".format(cuda_device_id))
-print(" -> Name of cuda device:    {}".format(torch.cuda.get_device_name(cuda_device_id)))
-
-print(" -> All cuda devices:\n")
-for i in range(torch.cuda.device_count()) :
-    print("    {}: {}".format(i, torch.cuda.get_device_name(i)))
-
-print("\nAll done!")
 
 def get_yaw_from_quat(quat):
     scipy_rot = R.from_quat(quat)
@@ -49,23 +34,29 @@ def get_2D_transform(xy, boxes_2D, pos, quat):
     return xy_rotated + pos[:2], boxes_2D
 
 def dets_2D_local_to_global(x_y, boxes_2D, pos, quat, dataset='JRDB', topic=None):
-    if dataset == 'JRDB':
-        rot_z_laser_to_base = np.pi/120
+    if dataset in ['JRDB', 'JRDB_TEST']:
+        rot_z_laser_to_base = np.pi / 120
         cs, ss = np.cos(rot_z_laser_to_base), np.sin(rot_z_laser_to_base)
-        R_laser_to_base = np.array([[cs, -ss], [ss, cs],], dtype=np.float32)
-        x_y = R_laser_to_base @ x_y.T # 2x2 @ 2xN
+        R_laser_to_base = np.array([[cs, -ss], [ss, cs]], dtype=np.float32)
+        x_y = R_laser_to_base @ x_y.T
         x_y = x_y.T
-        boxes_2D[:,-1] = boxes_2D[:,-1] + rot_z_laser_to_base
-    if dataset == 'Crowdbot' and (topic=='/front_lidar/scan' or topic=='/front_lidar/scan_modified'):
+        boxes_2D[:, -1] = boxes_2D[:, -1] + rot_z_laser_to_base
+
+    if dataset == 'Crowdbot' and (topic == '/front_lidar/scan' or topic == '/front_lidar/scan_modified'):
         trans_laserfront_to_base = [0.035, 0.0, 0.28]
         quat_laserfront_to_base = [0.0, 0.026176900686660683, 0.0, -0.9996573262225615]
         x_y, boxes_2D = get_2D_transform(x_y, boxes_2D, trans_laserfront_to_base, quat_laserfront_to_base)
-        
-    if dataset == 'Crowdbot' and (topic=='/rear_lidar/scan' or topic=='/rear_lidar/scan_modified'):
+
+    if dataset == 'Crowdbot' and (topic == '/rear_lidar/scan' or topic == '/rear_lidar/scan_modified'):
         trans_laserrear_to_base = [-0.516, 0.0, 0.164]
-        quat_laserrear_to_base = [0.0, 0., 1.0, 0.]
+        quat_laserrear_to_base = [0.0, 0.0, 1.0, 0.0]
         x_y, boxes_2D = get_2D_transform(x_y, boxes_2D, trans_laserrear_to_base, quat_laserrear_to_base)
-        
+
+    if dataset == 'SCAND':
+        # First-pass assumption:
+        # scan is already expressed in the local lidar frame,
+        # and pos/quat from Script 2 is the global lidar pose.
+        pass
 
     dets_2D_global, boxes_2D_global = get_2D_transform(x_y, boxes_2D, pos, quat)
     return dets_2D_global, boxes_2D_global
@@ -333,25 +324,58 @@ def combine_filtered_detections(out_det_2D_all_below_5m, out_det_3D_all_below_5m
 
     return combined_detections, indices_3D
 
+def get_2d_detector_kwargs(dataset, topic_name):
+    """
+    Return DR-SPAAM configuration for a given dataset/topic.
+    """
+    if dataset == 'Crowdbot' and topic_name.find('front') != -1 and topic_name.find('modified') != -1:
+        return {
+            "laser_fov_deg": 253.38,
+            "panoramic_scan": False,
+            "use_box": True,
+        }
+
+    if dataset == 'Crowdbot' and topic_name.find('rear') != -1 and topic_name.find('modified') != -1:
+        return {
+            "laser_fov_deg": 236.18,
+            "panoramic_scan": False,
+            "use_box": True,
+        }
+
+    # SCAND 2D scans are stored as panoramic scans in the lidar frame.
+    if dataset == 'SCAND':
+        return {
+            "laser_fov_deg": 360,
+            "panoramic_scan": True,
+            "use_box": True,
+        }
+
+    # Default
+    return {
+        "laser_fov_deg": 360,
+        "panoramic_scan": True,
+        "use_box": True,
+    }
+
 class Settings:
     """
     Settings class to store script parameters.
 
     Attributes:
-        dataset (str): Dataset that is being processed
-        config_path (str): Path to the configuration file
-        folder (str): Different subfolder in rosbag/ dir
-        overwrite (bool): Whether to overwrite existing output
-        save_raw (bool): Whether to save raw data of detection results
-        model (str): Checkpoints filename
-        save_thresh (float): Minimum confidence of detected boxes to save
-        detect_2D (bool): Flag indicating whether to perform 2D detection
-        model_2D (str): Checkpoints filename for the 2D detection model
-        save_thresh_2D (float): Minimum confidence threshold for saving 2D detected boxes
+        dataset (str): Dataset that is being processed (default: 'JRDB')
+        config_path (str): Path to the dataset configuration file.
+        folder (str): Different subfolder in rosbag/ dir (default: '0424_mds').
+        overwrite (bool): Whether to overwrite existing output (default: False).
+        save_raw (bool): Whether to save raw data of detection results (default: False).
+        model (str): Checkpoints filename (default: 'ckpt_e40_train_val.pth').
+        save_thresh (float): Minimum confidence of detected boxes to save (default: 0.5).
+        detect_2D (bool): Flag indicating whether to perform 2D detection (default: False).
+        model_2D (str): Checkpoints filename for the 2D detection model (default: 'ckpt_jrdb_ann_ft_dr_spaam_e20.pth').
+        save_thresh_2D (float): Minimum confidence threshold for saving 2D detected boxes (default: 0.5).
     """
 
-    def __init__(self, dataset, config_path, folder, overwrite=False, save_raw=False, model='./checkpoints/Person-MinkUNet-3D-JRDB-train-val-e40.pth', save_thresh=0.5,
-                  detect_2D=False, model_2D='./checkpoints/DR-SPAAM-2D-JRDB-train-val-e20.pth', save_thresh_2D=0.5):
+    def __init__(self, dataset, config_path, folder, model, overwrite=False, save_raw=False, save_thresh=0.5,
+                  detect_2D=False, model_2D=None, save_thresh_2D=0.5):
         self.dataset = dataset
         self.config_path = config_path
         self.folder = folder
@@ -363,58 +387,64 @@ class Settings:
         self.model_2D = model_2D
         self.save_thresh_2D = save_thresh_2D
 
+def parse_args():
+    parser = argparse.ArgumentParser(description="Detect pedestrians in prepared lidar sequences.")
+    parser.add_argument("--dataset", required=True, choices=["Crowdbot", "JRDB", "JRDB_TEST", "Daav", "SiT", "SCAND"])
+    parser.add_argument("--config", dest="config_path", required=True, help="Dataset path YAML.")
+    parser.add_argument("--folder", action="append", required=True, help="Logical dataset folder; repeat as needed.")
+    parser.add_argument("--model", required=True, help="Path to the Person-MinkUNet checkpoint.")
+    parser.add_argument("--model-2d", help="Path to the DR-SPAAM checkpoint.")
+    parser.add_argument("--detect-2d", action="store_true")
+    parser.add_argument("--save-thresh", type=float, default=0.5)
+    parser.add_argument("--save-thresh-2d", type=float, default=0.5)
+    parser.add_argument("--nms-2d-thresh", type=float, default=0.7)
+    parser.add_argument("--distance-split", type=float, default=5.0)
+    parser.add_argument("--save-raw", action="store_true")
+    parser.add_argument("--overwrite", action="store_true")
+    args = parser.parse_args()
+    if args.detect_2d and not args.model_2d:
+        parser.error("--detect-2d requires --model-2d.")
+    if args.dataset == "JRDB_TEST" and args.detect_2d:
+        parser.error("JRDB_TEST has no 2D lidar; omit --detect-2d.")
+    return args
+
+
 if __name__ == '__main__':
-    # Instantiate the Settings object with custom or default values
-    # folders = ['Cafeteria_1', 'Cafeteria_2', 'Cafeteria_3', 'Cafeteria_5', 'Cafeteria_6', 
-    #           'Cafe_street_1-002', 'Cafe_street_2-001', 
-    #           'Corridor_1', 'Corridor_10', 
-    #           'Hallway_1', 'Hallway_2', 'Hallway_3', 'Hallway_4', 'Hallway_6', 'Hallway_7', 'Hallway_8', 'Hallway_9', 'Hallway_10', 'Hallway_11', 
-    #           'Lobby_2', 'Lobby_3', 'Lobby_4', 'Lobby_5', 'Lobby_6', 'Lobby_7', 'Lobby_8', 
-    #           'Corridor_2', 'Corridor_3', 'Corridor_5', 'Corridor_7', 'Corridor_8', 'Corridor_9','Corridor_11',  
-    #           'Courtyard_1', 'Courtyard_2', 'Courtyard_4', 'Courtyard_5', 'Courtyard_6', 'Courtyard_8', 'Courtyard_9',
-    #           'Outdoor_Alley_2', 'Outdoor_Alley_3', 
-    #           'Subway_Entrance_2', 'Subway_Entrance_4', 
-    #           'Three_way_Intersection_3', 'Three_way_Intersection_4', 'Three_way_Intersection_5', 'Three_way_Intersection_8', 
-    #           'Crossroad_1-001',]
-    folders = ['0325_rds_defaced', 
-              '0325_shared_control_defaced', 
-              '0327_shared_control_defaced', 
-              '0410_mds_defaced', 
-              '0410_rds_defaced', 
-              '0410_shared_control_defaced', 
-              '0424_mds_defaced', 
-              '0424_rds_defaced', 
-              '0424_shared_control_defaced', 
-              '1203_manual_defaced', 
-              '1203_shared_control_defaced']
-    # folders = ['JRDB_whole',]
-    nms_2D_dist_norm_thresh = 0.7  # Set the desired distance threshold (NMS 2D normalized threshold)
-    max_distance = 5 # Set the desired distance partition (Tracking split)
-    if len(sys.argv) > 1:
-        subdir_arg = sys.argv[1]  # Get the single argument
-        folders = [subdir_arg]
-    
-    for folder in folders:
-        # args = Settings(dataset='SiT', config_path='./datasets_configs/data_path_SiT.yaml',
-        #                 folder=folder, overwrite=True, detect_2D=True, save_thresh_2D=0.5, save_thresh=0.5)
-        args = Settings(dataset='Crowdbot', config_path='./datasets_configs/data_path_Crowdbot.yaml',
-                        folder=folder, overwrite=True, detect_2D=True, save_thresh_2D=0.5, save_thresh=0.5)
-        # args = Settings(dataset='JRDB', config_path='./datasets_configs/data_path_JRDB.yaml',
-        #                 folder=folder, overwrite=True, detect_2D=True, save_thresh_2D=0.5, save_thresh=0.5)
+    cli_args = parse_args()
+    nms_2D_dist_norm_thresh = cli_args.nms_2d_thresh
+    max_distance = cli_args.distance_split
 
+    for folder in cli_args.folder:
+        args = Settings(
+            dataset=cli_args.dataset,
+            config_path=cli_args.config_path,
+            folder=folder,
+            model=cli_args.model,
+            model_2D=cli_args.model_2d,
+            detect_2D=cli_args.detect_2d,
+            save_thresh=cli_args.save_thresh,
+            save_thresh_2D=cli_args.save_thresh_2d,
+            save_raw=cli_args.save_raw,
+            overwrite=cli_args.overwrite,
+        )
 
-        assert args.dataset in ['JRDB', 'Crowdbot', 'SiT']
-
+        if args.dataset == 'JRDB_TEST' and args.detect_2D:
+            raise ValueError("JRDB_TEST has no 2D lidar. Use detect_2D=False.")
         # Create a CrowdBotDatabase instance with the specified folder and configuration path
         cb_data = CrowdBotDatabase(args.folder, config=args.config_path)
+
+        # Model checkpoints path
+        ckpt_path = os.path.abspath(os.path.expanduser(args.model))
 
         seq_num = cb_data.nr_seqs()
         print("Starting detection from {} lidar sequences!".format(seq_num))
 
         counter = 0
         for seq_idx in range(seq_num):
-            # Create a DetectorWithClock instance with the checkpoints path
-            detector_3D = DetectorWithClock(args.model)
+            # if seq_idx != 2:
+            #     continue
+                # Create a DetectorWithClock instance with the checkpoints path
+            detector_3D = DetectorWithClock(ckpt_path)
             plane_model = None
 
             # Source: lidar data in data/xxxx_processed/lidars
@@ -423,21 +453,21 @@ if __name__ == '__main__':
             seq = cb_data.seqs[seq_idx]
             if args.detect_2D:
                 lidar_2D_file_dir = cb_data.lidar_2D_dir
+                ckpt_2D_path = os.path.abspath(os.path.expanduser(args.model_2D))
                 detectors_2D = []
 
                 with open(os.path.join(lidar_2D_file_dir, seq, '00000.npy'), "rb") as f:
                     lasers = np.load(f, allow_pickle=True).item()
+
                 for key in lasers.keys():
-                    if args.dataset == 'Crowdbot' and key.find('front') != -1 and key.find('modified') != -1:
-                        print('FRONT')
-                        print(key)
-                        dr_spaam_2D = DR_SPAAM_detector(ckpt_file=args.model_2D, cls_threshold=args.save_thresh_2D, laser_fov_deg=253.38, panoramic_scan=False, use_box=True)
-                    elif args.dataset == 'Crowdbot' and key.find('rear') != -1  and key.find('modified') != -1:  
-                        print('REAR')
-                        print(key)
-                        dr_spaam_2D = DR_SPAAM_detector(ckpt_file=args.model_2D, cls_threshold=args.save_thresh_2D, laser_fov_deg=236.18, panoramic_scan=False, use_box=True)
-                    else:
-                        dr_spaam_2D = DR_SPAAM_detector(ckpt_file=args.model_2D, cls_threshold=args.save_thresh_2D, laser_fov_deg=360, panoramic_scan=True, use_box=True)
+                    detector_kwargs = get_2d_detector_kwargs(args.dataset, key)
+                    dr_spaam_2D = DR_SPAAM_detector(
+                        ckpt_file=ckpt_2D_path,
+                        cls_threshold=args.save_thresh_2D,
+                        laser_fov_deg=detector_kwargs["laser_fov_deg"],
+                        panoramic_scan=detector_kwargs["panoramic_scan"],
+                        use_box=detector_kwargs["use_box"],
+                    )
                     dr_spaam_2D.prepare_model()
                     detectors_2D.append(dr_spaam_2D)
 
@@ -464,7 +494,8 @@ if __name__ == '__main__':
             if args.save_raw:
                 det_seq_dir = os.path.join(dets_dir, seq)
             
-            if args.dataset == 'JRDB':
+            #Qolo pose
+            if args.dataset in ['JRDB', 'JRDB_TEST']:
                 pose_folder = 'tf_JRDB'
                 pose_suffix = "_tfJRDB_sampled.npy"
             elif args.dataset == 'Crowdbot':
@@ -473,8 +504,12 @@ if __name__ == '__main__':
             elif args.dataset == 'SiT':
                 pose_folder = 'tf_SiT'
                 pose_suffix = "_tf_SiT_sampled.npy"
+            elif args.dataset == 'SCAND':
+                pose_folder = 'tf_SCAND'
+                pose_suffix = "_tfSCAND_sampled.npy"
             else:
-                raise RuntimeError
+                pose_folder = 'tf_daav'
+                pose_suffix = "_tfdaav_sampled.npy"
                 
             tf_dir = os.path.join(cb_data.source_data_dir, pose_folder)
             pose_stampe_path = os.path.join(

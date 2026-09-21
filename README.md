@@ -5,7 +5,7 @@
   <img src="images/intro_image_paper.png" alt="Overview of the crowd analysis pipeline (placeholder)" width="85%">
 </p>
 
-This repository accompanies an academic **publication**, and an **[updated, improved version of the Crowdbot dataset](https://zenodo.org/records/17694140)**. It provides a reproducible **analysis pipeline for pedestrian behavior in crowds**. By analyzing motion metrics and **proxemics**, we study differences between **human–human interactions (HHI)** and **human–robot interactions (HRI)** in crowded public spaces across the **Crowdbot**, **JRDB**, and **SiT** datasets.
+This repository accompanies an academic **publication**, and an **[updated, improved version of the Crowdbot dataset](https://zenodo.org/records/17694140)**. It provides a reproducible **analysis pipeline for pedestrian behavior in crowds**. By analyzing motion metrics and **proxemics**, we study differences between **human–human interactions (HHI)** and **human–robot interactions (HRI)** in crowded public spaces across **CrowdBot**, **SCAND**, **JRDB** (train and test), and **SiT**.
 
 ---
 
@@ -20,6 +20,7 @@ The repository layout is as follows (key items):
 - `datasets_configs/` — dataset configuration YAMLs
   - `data_path_Crowdbot.yaml`
   - `data_path_JRDB.yaml`
+  - `data_path_SCAND.yaml`
   - `data_path_SiT.yaml`
 - `datasets_utils/` — dataset utilities (**package:** `crowdbot_data`) used by both environments
 - `lidar_det_2D_3D/` — LiDAR detection (**package:** `lidar_det`) combining
@@ -94,7 +95,10 @@ mamba activate ros_env
 
 # Minimal math/transforms used by ros-side scripts
 pip install scipy==1.16.2 numpy-quaternion==2024.0.12
+pip install python-lzf==0.2.4
 ```
+
+SCAND recordings that expose only `/velodyne_packets` also require `velodyne-decoder` in `ros_env`. Recordings containing `/velodyne_points` do not need it.
 
 RoboStack already provides the compiled message/runtime bits; no extra `apt` is needed.
 
@@ -142,25 +146,47 @@ Ensure your PyTorch CUDA version is compatible (this setup uses CUDA **11.8** wi
 
 ## Pipeline overview
 
-The repository provides `.ipynb` and `.py` processing scripts. They take as input **processed rosbags** or **prepared LiDAR data** from **Crowdbot**, **JRDB**, and **SiT**, and produce outputs in a unified **Crowdbot data convention** for crowd behavior analysis.
+The repository provides `.ipynb` and `.py` processing scripts. They take as input **processed rosbags** or **prepared LiDAR data** from **CrowdBot**, **SCAND**, **JRDB**, and **SiT**, and produce outputs in a unified **CrowdBot data convention** for crowd behavior analysis.
+
+Before running anything, edit the YAML files in `datasets_configs/`. Relative values are resolved from the YAML file's directory (the checked-in examples therefore point to the repository's `data/` directory); absolute paths and environment variables are also accepted. Run the commands below from the repository root.
 
 ### Four processing stages
 
-1. **`1_Lidar_from_rosbags.py`** — For **Crowdbot** and **JRDB**: extracts 2D/3D LiDAR scans from rosbags and transforms them to the **global frame**. Saves synchronized LiDAR timestamps. *(uses `ros_env`)*
-2. **`2_Pose_from_rosbags.py`** — For **Crowdbot** and **JRDB**: extracts robot pose, upsamples to 200 Hz, applies smoothing, and computes **velocity**, **acceleration**, and **jerk**. Synchronizes pose timestamps with LiDAR. *(uses `ros_env`)*
-3. **`3_Detections_from_lidar.py`** — For **Crowdbot**, **JRDB**, and **SiT**: runs 2D (DR-SPAAM) and 3D (Person_MinkUNet) detectors on prepared LiDAR data (**no rosbags**). Produces 2D-only, 3D-only, and merged close–far detections. *(uses `crowd_env`)*
-4. **`4_Tracks_from_detections.py`** — For **Crowdbot**, **JRDB**, and **SiT**: builds tracks with **AB3DMOT** from detections (**no rosbags**). Produces 2D/3D/merged tracks. *(uses `crowd_env`)*
+1. **`1_Lidar_from_rosbags.py`** — Extracts synchronized 2D/3D lidar for **CrowdBot**, **JRDB train**, and **SCAND**. For **JRDB test**, it reads the released upper/lower PCD streams, timestamps, and SteamLO odometry directly. *(uses `ros_env`)*
+2. **`2_Pose_from_rosbags.py`** — Extracts and interpolates robot pose for **CrowdBot**, **JRDB**, and **SCAND**; JRDB test poses are loaded from SteamLO CSV files. *(uses `ros_env`)*
+3. **`3_Detections_from_lidar.py`** — Runs 3D Person-MinkUNet and optional 2D DR-SPAAM detection. JRDB test is 3D-only because its released test set has no matching 2D lidar stream. *(uses `crowd_env`)*
+4. **`4_Tracks_from_detections.py`** — Builds 3D and optional merged 2D/3D tracks with **AB3DMOT**. *(uses `crowd_env`)*
 
 ### Dataset-specific extractors
 
 - **`Extract_gt_JRDB.py`** — extracts **ground truth** for **JRDB** only.
 - **`Extract_SiT.py`** — extracts **LiDAR**, **egomotion**, and **labels** for **SiT**.
 
-### Automated full pipeline
+### Full pipeline
+
+Every Python stage has an explicit command-line interface; use `--help` for all options. The wrapper accepts a dataset, path YAML, logical folder, 3D checkpoint, and optional 2D checkpoint:
 
 ```bash
-bash run_pipeline.sh
+bash rosbags_extraction/run_pipeline.sh \
+  CrowdBot datasets_configs/data_path_Crowdbot.yaml 0325_rds_defaced \
+  checkpoints/ckpt_e40_train_val.pth \
+  checkpoints/jrdb_dr_spaam_with_bev_box_e20.pth
 ```
+
+For JRDB train, set `JRDB_TRAIN_TIMESTAMPS_ROOT`. For JRDB test, set both `JRDB_TEST_ROOT` and `JRDB_TEST_ODOM_ROOT`; omit the optional 2D model argument. SCAND resolves the Jackal/Spot odometry and lidar topics from each bag automatically.
+
+### Revised analysis notebook
+
+Open `crowd_analysis/crowd_behavior.ipynb` after the tracking outputs exist. Its first parameter cell resolves repository paths, selects one dataset, and documents the final settings. Run the extraction/filtering sections once for each of `CROWDBOT`, `JRDB`, `SCAND`, and `SiT`; the registration cell retains each dataset's result tables for the cross-dataset plots.
+
+The curated notebook contains the analyses retained in the revised manuscript:
+
+- cubic Savitzky–Golay position smoothing over 1.5 s, followed by finite-horizon differences (1 s velocity, acceleration, and turning; 0.5 s jerk);
+- symmetric co-motion exclusion using at least 1 s of shared observations and a 2 m maximum distance excursion, plus the reported threshold sensitivity;
+- per-pedestrian Mann–Whitney tests and group-level Wasserstein-1 effect sizes;
+- significant-event detection (turn above 45° or speed change above 2 km/h within 1 s) and the joint energy-distance test;
+- edge-to-edge close-pass KDE analysis, equalization distance, and maximum excess clearance;
+- comfort-zone intrusion frequencies, density stratification on 4 s fragments, and robot/pedestrian speed controls using robust LOWESS (`frac=0.3`, two robust iterations).
 
 ---
 
